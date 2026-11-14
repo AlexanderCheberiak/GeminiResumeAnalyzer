@@ -61,16 +61,18 @@ SYSTEM_INSTRUCTION_TEMPLATE = """
 
 
 def analyze_resume(
-    pdf_bytes: bytes,
+    file_bytes: bytes,
+    mime_type: str,
     job_description: str,
     api_key: str,
     questions_count: int = 5,
 ) -> ATSReport:
     client = genai.Client(api_key=api_key)
 
-    pdf_part = types.Part.from_bytes(
-        data=pdf_bytes,
-        mime_type="application/pdf",
+    # Пряме передавання PDF або зображення без попередньої обробки
+    document_part = types.Part.from_bytes(
+        data=file_bytes,
+        mime_type=mime_type,
     )
 
     system_instruction = SYSTEM_INSTRUCTION_TEMPLATE.format(
@@ -80,7 +82,7 @@ def analyze_resume(
     response = client.models.generate_content(
         model="gemini-3.5-flash-lite",
         contents=[
-            pdf_part,
+            document_part,
             (
                 f"Кількість технічних запитань для генерації: {questions_count}.\n\n"
                 f"Текст опису вакансії:\n\n{job_description}"
@@ -111,9 +113,9 @@ col_input, col_result = st.columns([1, 1.2], gap="large")
 
 with col_input:
     st.subheader("Вхідні дані")
-    uploaded_pdf = st.file_uploader(
-        "Завантажте резюме кандидата (формат PDF)",
-        type=["pdf"],
+    uploaded_file = st.file_uploader(
+        "Завантажте резюме кандидата (PDF або зображення)",
+        type=["pdf", "png", "jpg", "jpeg", "webp"],
     )
     job_text = st.text_area(
         "Опис вакансії та вимоги роботодавця",
@@ -135,19 +137,20 @@ with col_result:
     if run_btn:
         if not api_key:
             st.error("Вкажіть GEMINI_API_KEY у файлі .env або в бічній панелі.")
-        elif uploaded_pdf is None:
-            st.warning("Завантажте PDF-файл із резюме кандидата.")
+        elif uploaded_file is None:
+            st.warning("Завантажте файл із резюме кандидата (PDF або зображення).")
         elif not job_text.strip():
             st.warning("Додайте текст опису вакансії.")
         else:
-            with st.spinner("Модель зчитує PDF та зіставляє вимоги..."):
+            with st.spinner("Модель зчитує документ та зіставляє вимоги..."):
                 try:
                     report = analyze_resume(
-    pdf_bytes=uploaded_pdf.getvalue(),
-    job_description=job_text.strip(),
-    api_key=api_key,
-    questions_count=int(questions_count),
-)
+                        file_bytes=uploaded_file.getvalue(),
+                        mime_type=uploaded_file.type or "application/pdf",
+                        job_description=job_text.strip(),
+                        api_key=api_key,
+                        questions_count=int(questions_count),
+                    )
 
                     with st.container(border=True):
                         st.markdown(f"### Кандидат: {report.candidate_name}")

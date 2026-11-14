@@ -3,3 +3,4 @@
 !.env.example
 venv/
 .venv/
+keypair1.pem
