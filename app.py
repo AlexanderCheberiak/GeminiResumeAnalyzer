@@ -40,14 +40,14 @@ class ATSReport(BaseModel):
         description="Обов'язкові або бажані навички з вакансії, відсутні в резюме"
     )
     interview_questions: list[TechnicalQuestion] = Field(
-        min_length=5,
-        max_length=5,
-        description="Рівно 5 технічних запитань для перевірки виявлених прогалин на співбесіді",
+        min_length=1,
+        max_length=15,
+        description="Технічні запитання для перевірки виявлених прогалин на співбесіді",
     )
 
 
 # 2. Системна інструкція для налаштування ролі моделі
-SYSTEM_INSTRUCTION = """
+SYSTEM_INSTRUCTION_TEMPLATE = """
 Ти — старший технічний рекрутер та ATS-експерт (Applicant Tracking System).
 Твоє завдання — неупереджено оцінити PDF-резюме кандидата відносно тексту вакансії.
 
@@ -55,28 +55,39 @@ SYSTEM_INSTRUCTION = """
 1. Аналізуй документ напряму: враховуй структуру, реальний комерційний досвід, стек технологій та досягнення, а не лише формальну наявність ключових слів.
 2. Оцінку match_score (0-100) обчислюй за формулою: 60% ваги — збіг обов'язкових технічних вимог (hard skills), 25% — релевантність комерційного досвіду та домену, 15% — додаткові переваги (nice-to-have).
 3. У missing_skills винось лише ті вимоги, які прямо зазначені у вакансії, але не підтверджені в резюме.
-4. Згенеруй рівно 5 практичних технічних запитань (interview_questions), спрямованих на перевірку саме тих прогалин, які потрапили до missing_skills або викликають сумніви.
+4. Згенеруй рівно {questions_count} практичних технічних запитань (interview_questions), спрямованих на перевірку саме тих прогалин, які потрапили до missing_skills або викликають сумніви.
 5. Увесь текст звіту формуй українською мовою, зберігаючи оригінальні англійські назви технологій (наприклад, Docker, FastAPI, PostgreSQL).
 """.strip()
 
 
-def analyze_resume(pdf_bytes: bytes, job_description: str, api_key: str) -> ATSReport:
+def analyze_resume(
+    pdf_bytes: bytes,
+    job_description: str,
+    api_key: str,
+    questions_count: int = 5,
+) -> ATSReport:
     client = genai.Client(api_key=api_key)
 
-    # Пряме передавання PDF-файлу без стороннього парсингу тексту
     pdf_part = types.Part.from_bytes(
         data=pdf_bytes,
         mime_type="application/pdf",
+    )
+
+    system_instruction = SYSTEM_INSTRUCTION_TEMPLATE.format(
+        questions_count=questions_count
     )
 
     response = client.models.generate_content(
         model="gemini-3.5-flash-lite",
         contents=[
             pdf_part,
-            f"Текст опису вакансії:\n\n{job_description}",
+            (
+                f"Кількість технічних запитань для генерації: {questions_count}.\n\n"
+                f"Текст опису вакансії:\n\n{job_description}"
+            ),
         ],
         config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_INSTRUCTION,
+            system_instruction=system_instruction,
             response_mime_type="application/json",
             response_schema=ATSReport,
             temperature=0.2,
@@ -86,7 +97,6 @@ def analyze_resume(pdf_bytes: bytes, job_description: str, api_key: str) -> ATSR
     if response.parsed is not None:
         return response.parsed
     return ATSReport.model_validate_json(response.text)
-
 
 # 3. Вебінтерфейс на Streamlit
 st.set_page_config(page_title="ATS Resume Analyzer", page_icon="📄", layout="wide")
@@ -107,8 +117,15 @@ with col_input:
     )
     job_text = st.text_area(
         "Опис вакансії та вимоги роботодавця",
-        height=320,
+        height=280,
         placeholder="Вставте текст вакансії: стек технологій, вимоги до досвіду, обов'язки...",
+    )
+    questions_count = st.number_input(
+        "Кількість технічних запитань для співбесіди",
+        min_value=1,
+        max_value=15,
+        value=5,
+        step=1,
     )
     run_btn = st.button("Проаналізувати відповідність", type="primary", use_container_width=True)
 
@@ -126,10 +143,11 @@ with col_result:
             with st.spinner("Модель зчитує PDF та зіставляє вимоги..."):
                 try:
                     report = analyze_resume(
-                        pdf_bytes=uploaded_pdf.getvalue(),
-                        job_description=job_text.strip(),
-                        api_key=api_key,
-                    )
+    pdf_bytes=uploaded_pdf.getvalue(),
+    job_description=job_text.strip(),
+    api_key=api_key,
+    questions_count=int(questions_count),
+)
 
                     with st.container(border=True):
                         st.markdown(f"### Кандидат: {report.candidate_name}")
@@ -154,7 +172,7 @@ with col_result:
                                 st.markdown("- Критичних прогалин не виявлено")
 
                         st.divider()
-                        st.markdown("**5 технічних запитань для перевірки прогалин**")
+                        st.markdown(f"**Технічні запитання для перевірки прогалин ({len(report.interview_questions)})**")
                         for idx, item in enumerate(report.interview_questions, start=1):
                             with st.expander(f"{idx}. {item.question}", expanded=(idx == 1)):
                                 st.markdown(f"**Перевіряє навичку:** `{item.skill_gap}`")
